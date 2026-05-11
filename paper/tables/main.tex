@@ -1,0 +1,12 @@
+\resizebox{\linewidth}{!}{%
+\begin{tabular}{@{}c|c|ccc|ccc|ccc@{}}
+\toprule
+ & baseline & \multicolumn{3}{c|}{MQ-LoRA} & \multicolumn{3}{c|}{VQ-LoRA} & \multicolumn{3}{c}{TA-LoRA} \\
+\cmidrule(lr){3-5}\cmidrule(lr){6-8}\cmidrule(lr){9-11}
+eval dim & mean & mean & $\Delta$ & win& mean & $\Delta$ & win& mean & $\Delta$ & win \\
+\midrule
+VQ & 0.390 & 0.453 & +0.063 & 60\% & \textbf{0.424} & \textbf{+0.035} & \textbf{50\%} & 0.382 & -0.007 & 45\% \\
+MQ & 0.857 & \textbf{0.925} & \textbf{+0.067} & \textbf{55\%} & 0.885 & +0.028 & 65\% & 0.915 & +0.058 & 55\% \\
+TA & -1.210 & -1.279 & -0.069 & 40\% & -1.183 & +0.027 & 55\% & \textbf{-1.114} & \textbf{+0.095} & \textbf{65\%} \\
+\bottomrule
+\end{tabular}}

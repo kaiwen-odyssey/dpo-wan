@@ -1,0 +1,37 @@
+# Main experiment hyper-parameters.  Used as the canonical reproducer.
+# Override any of these on the CLI: e.g. `04_train_dpo.py --lr 5e-5`
+sample:
+  size: [832, 480]
+  frame_num: 33          # ~2 seconds at 16 fps
+  fps: 16
+  sampling_steps: 25
+  guide_scale: 5.0
+  shift: 5.0
+  sample_solver: unipc
+
+splits:
+  n_train: 10000         # see "Limitations" — actual run scaled to budget
+  n_ablation: 1000
+  n_eval: 100
+
+candidates:
+  K: 2                   # candidates per prompt
+  base_seed: 4242
+
+dpo:
+  beta: 500.0
+  T: 1000.0
+  shared_noise: true
+
+train:
+  learning_rate: 1.0e-4
+  weight_decay: 0.0
+  batch_size: 1
+  gradient_accumulation_steps: 4
+  max_steps: 200
+  log_every: 5
+  save_every: 100
+  lora_rank: 16
+  lora_alpha: 16.0
+  bf16: true
+  grad_clip: 1.0

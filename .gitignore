@@ -1,0 +1,45 @@
+# Large artifacts — not in git
+data/
+runs/
+external/
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+build/
+dist/
+
+# LaTeX build artifacts
+paper/*.aux
+paper/*.log
+paper/*.out
+paper/*.toc
+paper/*.bbl
+paper/*.blg
+paper/*.synctex.gz
+paper/*.fls
+paper/*.fdb_latexmk
+paper/paper.pdf
+paper/dpo-wan_*.pdf
+
+# Editor / OS / tooling
+.vscode/
+.idea/
+.claude/
+*.swp
+*~
+.DS_Store
+
+# Secrets / local config
+.env
+.env.local
+*.secret
+wandb/

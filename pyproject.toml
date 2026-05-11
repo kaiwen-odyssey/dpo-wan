@@ -1,0 +1,68 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dpo-wan"
+version = "0.1.0"
+description = "Bidirectional Diffusion-DPO on Wan2.1-T2V-1.3B with VideoAlign rewards"
+authors = [{ name = "dpo-wan" }]
+requires-python = ">=3.12,<3.13"
+readme = "README.md"
+
+dependencies = [
+    "torch==2.9.1",
+    "torchvision",
+    "torchaudio",
+    "numpy<2",
+    "diffusers>=0.31.0",
+    "transformers>=4.49.0,<5",
+    "tokenizers>=0.20.3",
+    "accelerate>=1.1.1",
+    "peft>=0.13.0",
+    "safetensors",
+    "datasets>=2.20.0",
+    "pyarrow",
+    "huggingface_hub[cli]",
+    "qwen-vl-utils",
+    "easydict",
+    "ftfy",
+    "regex",
+    "tqdm",
+    "loguru",
+    "omegaconf",
+    "imageio",
+    "imageio-ffmpeg",
+    "av",
+    "moviepy==2.2.1",
+    "opencv-python-headless",
+    "decord",
+    "pandas",
+    "matplotlib",
+    "scipy",
+    "scikit-learn",
+    "wandb",
+    "tensorboard",
+    "pyyaml",
+    "rich",
+    "click",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff", "mypy", "ipython"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-dir]
+"" = "src"
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+torchvision = { index = "pytorch-cu128" }
+torchaudio = { index = "pytorch-cu128" }

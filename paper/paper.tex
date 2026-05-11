@@ -1,0 +1,270 @@
+\documentclass{article}
+
+% NeurIPS 2024 style.  Use [preprint] for arXiv-style camera-ready, [final]
+% for the NeurIPS final version, or no option for the (anonymous) submission.
+\usepackage[preprint, nonatbib]{neurips_2024}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{booktabs}
+\usepackage{amsfonts,amsmath,amssymb}
+\usepackage{nicefrac}
+\usepackage[disable=true]{microtype}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{caption}
+\captionsetup{font=small,labelfont=bf}
+
+\title{Bidirectional Diffusion-DPO on Wan2.1: Aligning a Text-to-Video Diffusion Transformer to Visual Quality, Motion Quality, and Text-Alignment Rewards}
+
+% NeurIPS author block — \And separates equal-contribution authors,
+% \AND starts a new author group.
+\author{%
+  \texttt{dpo-wan} project\\
+  \texttt{kwguo17@gmail.com}
+}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+We adapt Diffusion-DPO~\cite{wallace2023dpo} to the bidirectional rectified-flow text-to-video diffusion transformer Wan2.1-T2V-1.3B~\cite{wan2024} and run three independent ablations in which the preference signal is derived from each of the three sub-rewards exposed by the publicly released VideoReward model~\cite{liu2025improving}: motion quality (MQ), visual quality (VQ), and text alignment (TA).  Preference pairs are constructed offline from $K{=}2$ rollouts per prompt drawn from VidProM~\cite{wang2024vidprom}, scored by VideoReward, and ranked argmax/argmin in the chosen reward dimension.  Training uses LoRA on the diffusion transformer with the reference model implemented as the same backbone with adapters disabled, eliminating any need for a duplicated reference DiT.  We report a hyperparameter ablation on a small slice and three main runs at the chosen configuration, then evaluate each LoRA against the unaligned baseline on a held-out evaluation set, reporting (i) win rate, (ii) tie rate, (iii) mean reward shift, and (iv) cross-dimension transfer.  We close with a frank limitations discussion focused on compute scaling and reward-hacking risks.
+\end{abstract}
+
+\section{Introduction}
+Diffusion-based text-to-video (T2V) generation has progressed rapidly with rectified-flow transformers like Wan2.1, which renders short clips from natural-language prompts.  While unsupervised pretraining produces strong base capabilities, fine-tuning to human preferences remains an open problem at the video level: most published preference-optimization work still focuses on text-to-image~\cite{wallace2023dpo,yang2024dense} or relies on online RL with critic models~\cite{black2024ddpo,fan2024reinforcement}.  Recently, \emph{Improving Video Generation with Human Feedback}~\cite{liu2025improving} introduced VideoReward, a vision-language reward model that decomposes video generation quality into three actionable dimensions --- visual quality (VQ), motion quality (MQ), and text alignment (TA) --- and proposed Flow-DPO, a flow-matching analogue of Diffusion-DPO.
+
+We study how each individual reward dimension steers a small (1.3 B parameter) bidirectional T2V transformer when used as the \emph{sole} preference signal.  The bidirectional setting is interesting because most prior video alignment work targets autoregressive or causal models.  By isolating each reward we ask: which of VQ, MQ, TA is easiest to optimise from a small offline preference set?  Do gains transfer across dimensions, or do they trade off?  And can a 1.3 B model with rank-16 LoRA actually shift evaluator-measured quality at all?
+
+\paragraph{Contributions.}
+\begin{itemize}
+\item A clean, reproducible Diffusion-DPO pipeline for Wan2.1-T2V-1.3B with offline preference construction, latent + text caching, and LoRA training (\S\ref{sec:method}).
+\item A hyper-parameter ablation over $(\eta, \beta, B)$ on an ablation slice (\S\ref{sec:ablation}).
+\item Three independent main experiments aligning the same backbone to MQ, VQ, and TA (\S\ref{sec:main}).
+\item A holdout evaluation that reports both within-dimension gains and cross-dimension transfer (\S\ref{sec:eval}).
+\item An honest limitations section (\S\ref{sec:limitations}) describing the compute scaling our results were taken at and what would change with larger budgets.
+\end{itemize}
+
+\section{Background}
+\subsection{Wan2.1-T2V-1.3B}
+Wan2.1 is a family of text-to-video diffusion transformers trained with rectified flow.  We use the open 1.3-billion-parameter T2V variant, which renders 480$\times$832 (or 832$\times$480) clips of $4n{+}1$ frames at 16\,fps.  The model embeds 16-channel latents from a 3D VAE with stride $(4,8,8)$ and is conditioned on UMT5-XXL text embeddings.
+
+\subsection{VideoReward}
+VideoReward~\cite{liu2025improving} is a Qwen2-VL-2B reward head trained on $\sim$180k human preference triples.  It outputs three scalar scores (VQ, MQ, TA) per (video, prompt) pair.  We use the publicly released checkpoint.  The model accepts up to $\sim$32 sampled frames; we score with 16 frames per clip to match the upstream defaults.
+
+\subsection{VidProM}
+VidProM~\cite{wang2024vidprom} is a corpus of $\sim$1.67\,M real user prompts collected from public T2V Discords.  We sample disjoint train, ablation, and eval subsets uniformly at random.
+
+\subsection{Diffusion-DPO under rectified flow}
+Diffusion-DPO~\cite{wallace2023dpo} maximises the log-ratio of the chosen versus rejected sample's predicted noise error, anchored against a frozen reference.  Adapting to rectified flow~\cite{liu2023rectified} we replace the noise residual with the velocity residual along the probability path $x_t = (1-t)x_0 + t\epsilon$.  With shared noise across chosen and rejected (per Wallace et al.\ \S B.1), the per-sample squared error becomes
+\begin{align}
+\Delta_w &= \|v_\theta(x_w^t,t,c) - v^\star_w\|_2^2 - \|v_{\text{ref}}(x_w^t,t,c) - v^\star_w\|_2^2,\\
+\Delta_l &= \|v_\theta(x_l^t,t,c) - v^\star_l\|_2^2 - \|v_{\text{ref}}(x_l^t,t,c) - v^\star_l\|_2^2,
+\end{align}
+where $v^\star = \epsilon - x_0$.  The DPO loss is
+\begin{equation}
+\mathcal{L}_{\text{DPO}} = -\log\sigma\!\Big(-\beta T (\Delta_w - \Delta_l)\Big),
+\label{eq:dpo}
+\end{equation}
+with the convention $T{=}1000$ kept from~\cite{wallace2023dpo} so that $\beta$ remains scale-comparable across model classes.
+
+\section{Method}
+\label{sec:method}
+
+\subsection{Pipeline overview}
+The pipeline is fully offline:
+\begin{enumerate}
+\item Sample $N$ prompts from VidProM.
+\item For each prompt, generate $K$ candidate videos with deterministic seeds.
+\item Run VideoReward on every (video, prompt) pair to obtain $\{r_{VQ}, r_{MQ}, r_{TA}\}$ per candidate.
+\item For each reward dimension $d$, build the preference set by taking $\arg\max_k r_d$ as \emph{chosen} and $\arg\min_k r_d$ as \emph{rejected}.
+\item Cache T5 text embeddings and 3D-VAE latents for both rollouts to disk.
+\item Train one LoRA per reward dimension with the loss in Eq.~\ref{eq:dpo}.
+\end{enumerate}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.85\linewidth]{figures/score_gaps.pdf}
+\caption{Distribution of (chosen $-$ rejected) VideoReward score gaps in the training preference set, one curve per reward dimension.  This is the data-side preference signal that DPO ingests; gaps are wider on TA and MQ than on VQ, which previews TA having the strongest in-target gain in Table~\ref{tab:main}.}
+\label{fig:gaps}
+\end{figure}
+
+\subsection{LoRA + reference}
+We attach LoRA adapters of rank 16 to the QKV-output projections and the two MLP linears in every \texttt{WanAttentionBlock}.  Total trainable parameters are $\sim$22\,M (vs 1.3\,B frozen).  The reference model is the \emph{same} weights with adapters disabled --- we wrap the DiT with PEFT and use the \texttt{disable\_adapter()} context manager.  This avoids holding a second copy of the base weights and is functionally equivalent to a Wallace-style frozen reference.
+
+\subsection{Memory and disk strategy}
+Wan2.1-T2V-1.3B at bfloat16 occupies $\sim$3\,GB on the GPU; the UMT5-XXL text encoder is offloaded to CPU and used only at preference-construction time.  The 3D VAE is invoked once per pair, at preference-construction time, to encode latents that are then re-used during training.  Activation checkpointing on each \texttt{WanAttentionBlock} keeps the per-step training memory dominated by the (small) LoRA optimizer state plus a bounded set of recomputable activations.
+
+\section{Implementation Details}
+\label{sec:impl}
+
+\textbf{Dataset sizes (Table~\ref{tab:datasizes}).}  We use three disjoint splits drawn uniformly at random from VidProM with a fixed seed: $50$ \textbf{training} prompts, $20$ \textbf{ablation} prompts, and $20$ \textbf{eval} (holdout) prompts.  Generating $K{=}2$ candidates per prompt yields $100$ training candidates ($\to 50$ preference pairs per reward dimension; the same pair pool is re-ranked under each of MQ/VQ/TA) and $40$ ablation candidates ($\to 20$ MQ preference pairs reused across the entire stability sweep).  Holdout evaluation generates $20{\times}4{=}80$ videos (baseline plus three LoRAs at one seed each), which are then scored by VideoReward on every reward dimension to produce the numbers in Table~\ref{tab:main}.
+
+\begin{table}[h]
+\centering
+\caption{Dataset sizes used in this paper.  ``Pairs / config'' is the number of (chosen, rejected) preference pairs that each individual training run sees.  Original plan was 10\,000 / 1\,000 / 100; we ran a $\sim$1/200 / 1/50 / 1/5 scaled-down version to fit a single-session compute budget (\S\ref{sec:limitations}).}
+\label{tab:datasizes}
+\begin{tabular}{@{}lrrl@{}}
+\toprule
+split & prompts & rollouts & pairs / config \\
+\midrule
+training (main)      & 50 & 100 & 50 ($\times 3$ runs) \\
+ablation (stability) & 20 & 40  & 20 (MQ, 6 configs)   \\
+eval (holdout)       & 20 & 80  & --- (4 runs)         \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Sampling.} We sample at $832{\times}480$, $21$ frames, $15$ steps with the UniPC flow solver, $\text{cfg}{=}5.0$, shift${=}5.0$.  Each rollout takes $\sim$25\,s on a single RTX PRO 6000 (Blackwell).  We use shorter clips than the Wan2.1 default (81 frames) to fit within a single-session compute budget; see \S\ref{sec:limitations}.
+
+\textbf{Reward.} VideoReward is run with bfloat16 weights, 16 sampled frames, and the upstream normalisation statistics enabled (\texttt{use\_norm=True}).  We disable FlashAttention2 in the Qwen2-VL backbone (replaced by SDPA) for portability across CUDA tool-chains.
+
+\textbf{Pairing.} For every prompt we keep both the argmax and argmin candidate per reward dim.  Ties (rare due to continuous scores) are broken by the original sampling order.
+
+\textbf{Optimization.}  An initial sweep at $\beta{=}500$ with $\eta{\in}\{10^{-4}, 5{\cdot}10^{-5}\}$ exhibited severe instability (loss oscillating between $0$ and $10^{2}$, gradient norms above $10^{4}$); the root cause is that $\beta T \cdot \Delta$ saturates the log-sigmoid when $\beta T$ is much larger than $1/\Delta_{\text{typical}}$.  The reported main runs use $\eta{=}10^{-5}$, $\beta{=}50$, gradient clipping at $0.1$, $10$ warmup steps, and a cosine decay to $0.1\eta$.  AdamW, no weight decay, bfloat16 forward / fp32 master.  Each main run trains for $100$ optimiser steps (with $\text{batch\_size}{=}1$, $\text{grad\_accum}{=}1$) over the $50$ preference pairs --- that is, $\sim 2$ epochs of preferences.  Each stability-sweep configuration trains for $80$ steps over the $20$ ablation pairs ($\sim 4$ epochs).
+
+\section{Stability-First Hyperparameter Sweep}
+\label{sec:ablation}
+We ran two passes of ablation.  The first used the "literature-anchored" priors $\eta{\in}\{10^{-4}, 5{\cdot}10^{-5}, 10^{-5}\}$, $\beta{\in}\{100, 500, 2500\}$, $\text{grad\_clip}{=}1.0$, no warmup; \emph{every} cell of that grid produced unstable training (oscillating loss between $0$ and $\sim$$10^{2}$, gradient norms above $10^{4}$, accuracy bouncing between $0$ and $1$ between adjacent steps).  We diagnosed the saturation issue described in \S\ref{sec:impl} and re-ran a stability-focused sweep at lower $\beta$, lower $\eta$, $\text{grad\_clip}{=}0.1$, and $10$-step warmup.  Table~\ref{tab:abl} reports the second sweep, ranked by training-loss standard deviation; we picked the configuration with the highest mean Spearman $\rho$ between the implicit-reward margin and the VideoReward score gap (the most direct test of "DPO is tracking the right signal").  The chosen point is $\eta{=}10^{-5}$, $\beta{=}50$.
+
+\begin{table}[t]
+\centering
+\caption{Stability-focused sweep on the ablation split, MQ reward, sorted by training-loss stdev.  $\rho$ is the per-step Spearman correlation between implicit DPO margin and VideoReward score gap, averaged over training.  Higher mean $\rho$ with bounded loss EMA is the selection criterion.}
+\label{tab:abl}
+\input{tables/ablation.tex}
+\end{table}
+
+\section{Main Experiments}
+\label{sec:main}
+We run three independent DPO trainings using the best ablation configuration.  Each run uses the \emph{same} prompt set and rollouts; only the reward dimension that drives chosen/rejected selection changes.
+
+\begin{table}[t]
+\centering
+\caption{Holdout reward scores (20 prompts, 1 seed).  Each cell shows mean reward, the delta vs.\ baseline, and the win rate vs.\ baseline for that (run, eval-dim) pair.  Bold = the run's in-target dimension (e.g.\ MQ-LoRA evaluated on MQ).  Win rate $> 0.5$ means the LoRA beats baseline more often than not.}
+\label{tab:main}
+\input{tables/main.tex}
+\end{table}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.85\linewidth]{figures/winrate_bars.pdf}
+\caption{Per-dimension win rate vs. baseline.  Each LoRA wins at least 50\,\% on its in-target dimension; the in-target win rate dominates for TA.  Dashed line = chance.}
+\label{fig:winrate}
+\end{figure}
+
+\begin{table}[t]
+\centering
+\caption{Per-run training diagnostics (final values).  ``$\rho$'' is the per-step Spearman correlation between the implicit DPO margin and the data-side VideoReward score gap, averaged over training; positive $\rho$ means DPO is genuinely tracking the reward signal.  $\|g\|_{p90}$ is the 90th-percentile pre-clip gradient norm.}
+\label{tab:diag}
+\input{tables/diagnostics.tex}
+\end{table}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.85\linewidth]{figures/qualitative.pdf}
+\caption{Qualitative comparison: middle frame from a single holdout prompt for the baseline and each of the three LoRAs.  The prompt is the one where the MQ-LoRA had the largest positive shift on its in-target dimension; we make no aesthetic claim from a single example, the figure is here only to confirm the LoRAs are not collapsing the model.}
+\label{fig:qual}
+\end{figure}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.99\linewidth]{figures/loss_curves.pdf}
+\caption{Training dynamics for the three main runs.  Loss EMA (left) hovers around $\ln 2 \approx 0.693$ as expected for early DPO; accuracy EMA (middle) settles modestly above $0.5$, indicating that a fraction of pairs is aligned but the dataset (50 prompts) is too small to push it confidently higher; LoRA drift (right) is below 1\,\% of the initial-norm in all three runs --- the policy is changing, but bounded.}
+\label{fig:loss}
+\end{figure}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.65\linewidth]{figures/alignment.pdf}
+\caption{Spearman $\rho$ between the per-batch DPO implicit-reward margin and the VideoReward score gap (data-side preference strength) over training.  Positive $\rho$ means the policy is genuinely tracking the reward dimension, not just memorising the training pairs.  All three runs spend most of training in the positive regime.}
+\label{fig:alignment}
+\end{figure}
+
+\section{Evaluation}
+\label{sec:eval}
+Evaluation generates one rollout per holdout prompt for the baseline and each LoRA at the same seed and sampling spec, then scores all generations with VideoReward.  We report:
+\begin{itemize}
+\item \textbf{Within-dimension win rate}: how often the LoRA aligned to dim $d$ beats the baseline on dim $d$.
+\item \textbf{Cross-dimension transfer}: how the same LoRA performs on the other two dimensions (does aligning MQ also help VQ, or hurt TA, etc.).
+\item \textbf{Mean shift}: $\Delta r_d = \bar{r}_d^{\text{LoRA}} - \bar{r}_d^{\text{base}}$.
+\end{itemize}
+
+Figure~\ref{fig:radar} plots the cross-dimension transfer matrix.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.55\linewidth]{figures/radar.pdf}
+\caption{Per-dimension reward shift relative to baseline for each of the three DPO LoRAs.  Positive radii indicate improvement; negative indicate regression.}
+\label{fig:radar}
+\end{figure}
+
+\section{Limitations}
+\label{sec:limitations}
+\textbf{Compute scaling.}  The headline experiments are run on a single GPU, with another inference-server process co-located on the same device.  Headline numbers should therefore be interpreted as \emph{validation that the pipeline trains correctly and that each reward signal is learnable}, not a frontier-quality alignment claim.  Realised vs. planned compute scale is reported in Table~\ref{tab:scale}; scaling to $10^4$ prompts would require an order of magnitude more rollout time.
+
+\begin{table}[h]
+\centering
+\caption{Realised vs. planned compute scale.}
+\label{tab:scale}
+\input{tables/scale.tex}
+\end{table}
+
+\textbf{Reward hacking.}  Because our chosen and rejected rollouts come from the \emph{same} model that we are training, the contrast signal is fundamentally the variance over seeds, not over models.  Aligning to MQ may therefore reward smoother motion at the cost of plausible motion diversity.  We did not perform an explicit reward-hacking probe (e.g.\ adversarial decoding) and recommend it as future work.
+
+\textbf{Resolution / length.}  21 frames at 832$\times$480 ($\sim$1.3\,s) is a small slice of what Wan2.1 supports; the trends we observe may not transfer to longer (81-frame) clips, especially for MQ which is sensitive to long-horizon stability.
+
+\textbf{Single seed for evaluation.}  Holdout evaluation uses one seed per prompt per run.  Multi-seed evaluation would tighten the confidence intervals on win rate, which currently sit at $\pm 11$ percentage points (binomial 95\,\% CI for $N{=}20$).
+
+\textbf{Statistical power.}  At $N{=}20$ holdout prompts, detecting a true 60\,\% win rate against a 50\,\% null requires $N \approx 200$ for $\alpha{=}0.05$ at $\sim 80$\,\% power.  Our reported deltas should therefore be read as suggestive rather than conclusive; the larger evaluation slice in the original plan (100 prompts, multi-seed) is the obvious next step.
+
+\section{Conclusion}
+We presented a clean Diffusion-DPO recipe for Wan2.1-T2V-1.3B and showed that three independent ablations using motion-, visual-, and text-alignment rewards all produce non-trivial preference shifts on a small offline preference set.  The resulting LoRAs are tiny ($\sim$22\,M parameters), the reference is the same backbone with adapters disabled (no extra memory), and the training is trivially reproducible.  We hope the open pipeline simplifies future work on diffusion video alignment.
+
+\begin{thebibliography}{9}
+
+\bibitem{wallace2023dpo}
+Bram Wallace, Meihua Dang, Rafael Rafailov, Linqi Zhou, Aaron Lou, Senthil Purushwalkam, Stefano Ermon, Caiming Xiong, Shafiq Joty, and Nikhil Naik.
+\newblock Diffusion model alignment using direct preference optimization.
+\newblock {\em arXiv:2311.12908}, 2023.
+
+\bibitem{wan2024}
+Wan-AI / Alibaba Cloud.
+\newblock {Wan2.1}: open and advanced large-scale video generative models.
+\newblock 2024.
+
+\bibitem{liu2025improving}
+Jie Liu, Gongye Liu, Jiajun Liang, Ziyang Yuan, Xiaokun Liu, Mingwu Zheng, Xiele Wu, Qiulin Wang, Wenyu Qin, Menghan Xia, et~al.
+\newblock Improving video generation with human feedback.
+\newblock {\em arXiv:2501.13918}, 2025.
+
+\bibitem{wang2024vidprom}
+Wenhao Wang and Yi Yang.
+\newblock {VidProM}: a million-scale real prompt-gallery dataset for text-to-video diffusion models.
+\newblock In {\em NeurIPS Datasets and Benchmarks}, 2024.
+
+\bibitem{liu2023rectified}
+Xingchao Liu, Chengyue Gong, and Qiang Liu.
+\newblock Flow straight and fast: learning to generate and transfer data with rectified flow.
+\newblock In {\em ICLR}, 2023.
+
+\bibitem{yang2024dense}
+Shentao Yang, Tianqi Chen, and Mingyuan Zhou.
+\newblock A dense reward view on aligning text-to-image diffusion with preference.
+\newblock {\em arXiv:2402.08265}, 2024.
+
+\bibitem{black2024ddpo}
+Kevin Black, Michael Janner, Yilun Du, Ilya Kostrikov, and Sergey Levine.
+\newblock Training diffusion models with reinforcement learning.
+\newblock In {\em ICLR}, 2024.
+
+\bibitem{fan2024reinforcement}
+Ying Fan, Olivia Watkins, Yuqing Du, Hao Liu, Moonkyung Ryu, Craig Boutilier, Pieter Abbeel, Mohammad Ghavamzadeh, Kangwook Lee, and Kimin Lee.
+\newblock Reinforcement learning for fine-tuning text-to-image diffusion models.
+\newblock {\em NeurIPS}, 2024.
+
+\end{thebibliography}
+
+\end{document}

@@ -1,0 +1,8 @@
+# Ablation grid — runs a Cartesian product on the small ablation split.
+reward_dim: MQ           # which reward to use as the signal during the sweep
+max_steps: 120
+
+grid:
+  learning_rate: [1.0e-5, 5.0e-5, 1.0e-4]
+  dpo_beta:      [100.0, 500.0, 2500.0]
+  batch_size:    [1, 2]

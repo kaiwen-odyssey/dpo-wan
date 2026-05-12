@@ -1,12 +1,9 @@
-\resizebox{\linewidth}{!}{%
-\begin{tabular}{@{}c|c|ccc|ccc|ccc@{}}
+\begin{tabular}{@{}l|c|cccc@{}}
 \toprule
- & baseline & \multicolumn{3}{c|}{MQ-LoRA} & \multicolumn{3}{c|}{VQ-LoRA} & \multicolumn{3}{c}{TA-LoRA} \\
-\cmidrule(lr){3-5}\cmidrule(lr){6-8}\cmidrule(lr){9-11}
-eval dim & mean & mean & $\Delta$ & win& mean & $\Delta$ & win& mean & $\Delta$ & win \\
+variant & baseline mean & LoRA mean & $\Delta$ & win\% & tie\% \\
 \midrule
-VQ & 0.390 & 0.453 & +0.063 & 60\% & \textbf{0.424} & \textbf{+0.035} & \textbf{50\%} & 0.382 & -0.007 & 45\% \\
-MQ & 0.857 & \textbf{0.925} & \textbf{+0.067} & \textbf{55\%} & 0.885 & +0.028 & 65\% & 0.915 & +0.058 & 55\% \\
-TA & -1.210 & -1.279 & -0.069 & 40\% & -1.183 & +0.027 & 55\% & \textbf{-1.114} & \textbf{+0.095} & \textbf{65\%} \\
+MQ\_unfilt  ($\lambda{=}0$, 1000 pairs) & 0.845 & \textbf{0.900} & \textbf{+0.055} & \textbf{50\%} & \textbf{10\%} \\
+MQ\_filt   ($\lambda{=}0$, 767 pairs, m$\geq$0.2) &  & 0.835 & -0.010 & 55\% & 0\% \\
+MQ\_sft    ($\lambda{=}10$, 1000 pairs) &  & 0.798 & -0.047 & 40\% & 0\% \\
 \bottomrule
-\end{tabular}}
+\end{tabular}

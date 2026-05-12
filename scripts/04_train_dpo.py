@@ -31,6 +31,7 @@ def main() -> None:
                     help="override preference dir (e.g. for margin-filtered set)")
     ap.add_argument("--lambda-sft", type=float, default=0.0,
                     help="SFT anchor weight on chosen (DPO+SFT)")
+    ap.add_argument("--save-every", type=int, default=100)
     args = ap.parse_args()
 
     setup_logging()
@@ -61,6 +62,7 @@ def main() -> None:
         lora_rank=args.lora_rank,
         seed=args.seed,
         lambda_sft=args.lambda_sft,
+        save_every=args.save_every,
         wandb_project=args.wandb_project,
         wandb_run_name=args.run_name,
         wandb_mode=args.wandb_mode,

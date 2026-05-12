@@ -23,7 +23,8 @@ log = logging.getLogger(__name__)
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--split", choices=["train", "ablation", "eval"], required=True)
+    ap.add_argument("--split", required=True,
+                    help="split name; reads prompts/<split>.csv (arbitrary string ok)")
     ap.add_argument("--K", type=int, default=2)
     ap.add_argument("--limit", type=int, default=None,
                     help="cap number of prompts (handy for smoke tests)")
@@ -33,6 +34,8 @@ def main() -> None:
     ap.add_argument("--height", type=int, default=480)
     ap.add_argument("--score-only", action="store_true",
                     help="skip generation, just (re)compute the scores CSV")
+    ap.add_argument("--reward-num-frames", type=int, default=None,
+                    help="frames fed to VideoReward (None => use config default; fps=2.0)")
     args = ap.parse_args()
 
     setup_logging()
@@ -75,6 +78,7 @@ def main() -> None:
         K=args.K,
         scorer=scorer,
         out_csv=scores_csv,
+        num_frames=args.reward_num_frames,
     )
     log.info("scores written: %s (%d rows)", scores_csv, len(df_scores))
 

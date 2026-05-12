@@ -76,8 +76,14 @@ def score_candidates(
     K: int,
     scorer: VideoRewardScorer,
     out_csv: Path,
+    num_frames: int | None = None,
 ) -> pd.DataFrame:
-    """Score every (prompt, k) candidate.  Cached to `out_csv`."""
+    """Score every (prompt, k) candidate.  Cached to `out_csv`.
+
+    `num_frames=None` (default) makes VideoReward subsample at its training
+    fps (2.0); this matches its training distribution for any clip length.
+    Pass an int to force a fixed frame budget instead.
+    """
     if out_csv.exists():
         return pd.read_csv(out_csv)
 
@@ -94,13 +100,14 @@ def score_candidates(
                 prompt_per_path.append(str(row["prompt"]))
                 keys.append((uuid, k))
 
-    log.info("scoring %d candidates...", len(paths_to_score))
+    log.info("scoring %d candidates (num_frames=%s)...", len(paths_to_score), num_frames)
     BATCH = 4
     results: list[RewardResult] = []
     for i in range(0, len(paths_to_score), BATCH):
         chunk_paths = paths_to_score[i : i + BATCH]
         chunk_prompts = prompt_per_path[i : i + BATCH]
-        chunk_results = scorer.score(chunk_paths, chunk_prompts, num_frames=16, use_norm=True)
+        chunk_results = scorer.score(chunk_paths, chunk_prompts,
+                                      num_frames=num_frames, use_norm=True)
         results.extend(chunk_results)
 
     for (uuid, k), r in zip(keys, results):

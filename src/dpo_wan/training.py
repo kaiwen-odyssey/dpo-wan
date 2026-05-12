@@ -182,6 +182,13 @@ def train_dpo(cfg: TrainConfig, wan: sampling.WanT2V) -> Path:
             lora_init_norm_sq += float(p.detach().pow(2).sum().item())
 
     history: list[dict] = []
+    # Per-optimizer-step UUID log: list of dicts {step: int, uuids: [str]}.
+    # With grad_accum > 1, each step's uuids = concatenation of the uuids in
+    # all micro-batches that contributed to that gradient.  Used by
+    # `checkpoint_reward_eval.py` to score the policy on the prompts seen in
+    # the just-trained 50-step window.
+    uuid_log: list[dict] = []
+    step_uuid_buffer: list[str] = []
     step = 0
     t0 = time.time()
     accum = 0
@@ -237,6 +244,9 @@ def train_dpo(cfg: TrainConfig, wan: sampling.WanT2V) -> Path:
 
             loss.backward()
 
+            # ---- track which UUIDs this opt step touched -----
+            step_uuid_buffer.extend(batch.get("ids", []))
+
             # ---- accumulate per-pair signal across micro-batches ------
             mp = metrics["margin_per_pair"].detach().float().cpu().tolist()
             tp = t.detach().float().cpu().tolist()
@@ -275,6 +285,9 @@ def train_dpo(cfg: TrainConfig, wan: sampling.WanT2V) -> Path:
                 optim.zero_grad(set_to_none=True)
                 accum = 0
                 step += 1
+                # Flush per-step uuid log
+                uuid_log.append({"step": step, "uuids": list(step_uuid_buffer)})
+                step_uuid_buffer = []
 
                 # ----- EMA smoothing -----
                 cur_loss = float(metrics["loss"].item())
@@ -398,6 +411,8 @@ def train_dpo(cfg: TrainConfig, wan: sampling.WanT2V) -> Path:
 
                 if step % cfg.save_every == 0 or step == cfg.max_steps:
                     _save_checkpoint(peft_model, out_dir / f"step_{step:06d}", history)
+                    # Flush uuid log alongside the checkpoint
+                    (out_dir / "uuid_log.json").write_text(json.dumps(uuid_log, indent=0))
 
     # Final save
     final = _save_checkpoint(peft_model, out_dir / "final", history)

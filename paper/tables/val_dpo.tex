@@ -1,0 +1,10 @@
+\begin{tabular}{l|cc|ccc|c}
+\toprule
+ & \multicolumn{2}{c|}{train (late)} & \multicolumn{3}{c|}{validation (held-out, $N{=}20$)} & val \\
+run & acc & $R^{\Delta}_{\text{train}}$ & acc & $R_{\text{chosen}}^{\text{val}}$ & $R^{\Delta}_{\text{val}}$ & Spearman $\rho$ \\
+\midrule
+\textbf{MQ\_unfilt}         & 0.49 & $+2{\times}10^{-5}$  & \textbf{0.55} & $+5.6{\times}10^{-5}$  & \textbf{$+9.8{\times}10^{-5}$} & \textbf{+0.11} \\
+MQ\_filt (m$\geq$0.2)       & 0.48 & $+16{\times}10^{-5}$ & 0.50 & $\mathbf{-44}{\times}10^{-5}$ & $-1.6{\times}10^{-5}$         & +0.29 \\
+MQ\_sft ($\lambda{=}10$)    & 0.62 & $-6{\times}10^{-5}$  & 0.55 & $+5.4{\times}10^{-5}$  & $+4.3{\times}10^{-5}$         & $\mathbf{-0.19}$ \\
+\bottomrule
+\end{tabular}
